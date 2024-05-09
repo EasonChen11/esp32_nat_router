@@ -344,6 +344,184 @@ int set_sta(int argc, char **argv)
     return err;
 }
 
+int del_ssid(int argc, char *argv)
+{
+    esp_err_t err;
+    nvs_handle_t nvs_handle;
+    err = nvs_open(PARAM_NAMESPACE, NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Error (%s) opening NVS handle!", esp_err_to_name(err));
+        return err;
+    }
+    else
+    {
+        // 删除SSID, 線性搜尋所有ssid0, ssid1, ssid2, ..., 直到找到要刪除的SSID,並將一起的password...一起刪除, 然後將後面的SSID全部往前移動
+        char ssid_to_delete[64];
+        strcpy(ssid_to_delete, argv);
+        int32_t count = argc;
+        char ssid[32];
+        for (int32_t i = 0; i < count; i++)
+        {
+            memset(ssid, 0, sizeof(ssid));
+            snprintf(ssid, sizeof(ssid), "ssid%ld", i);
+            size_t len;
+            err = nvs_get_str(nvs_handle, ssid, NULL, &len);
+            if (err != ESP_OK)
+            {
+                ESP_LOGE(TAG, "get len failed: %s", esp_err_to_name(err));
+                ESP_LOGE(TAG, "Failed to get SSID: %s, Error: %s", ssid, esp_err_to_name(err));
+                return err;
+            }
+            char *ssid_str = (char *)malloc(len);
+            err = nvs_get_str(nvs_handle, ssid, ssid_str, &len);
+            if (err != ESP_OK)
+            {
+                ESP_LOGE(TAG, "get ssid_str failed: %s", esp_err_to_name(err));
+                ESP_LOGE(TAG, "Failed to get SSID: %s, Error: %s", ssid, esp_err_to_name(err));
+                return err;
+            }
+            // ESP_LOGI(TAG, "ssid_str: %s has been Found compare is %d", ssid_str, strncmp(ssid_str, ssid_to_delete, len));
+            // ESP_LOGI(TAG, "ssid_str: %s, ssid_to_delete: %s", ssid_str, ssid_to_delete);
+            if (strcmp(ssid_str, ssid_to_delete) == 0)
+            {
+                // 找到要刪除的SSID
+                // 刪除SSID, password, ent_username, ent_identity
+                // ESP_LOGI(TAG, "Found SSID to delete: %s", ssid_to_delete);
+                err = nvs_erase_key(nvs_handle, ssid);
+                if (err != ESP_OK)
+                {
+                    ESP_LOGE(TAG, "Failed to delete SSID: %s, Error: %s", ssid, esp_err_to_name(err));
+                    return err;
+                }
+                snprintf(ssid, sizeof(ssid), "passwd%ld", i);
+                err = nvs_erase_key(nvs_handle, ssid);
+                if (err != ESP_OK)
+                {
+                    ESP_LOGE(TAG, "Failed to delete passwd: %s, Error: %s", ssid, esp_err_to_name(err));
+                    return err;
+                }
+                snprintf(ssid, sizeof(ssid), "ent_username%ld", i);
+                err = nvs_erase_key(nvs_handle, ssid);
+                if (err != ESP_OK)
+                {
+                    ESP_LOGE(TAG, "Failed to delete ent_username: %s, Error: %s", ssid, esp_err_to_name(err));
+                    return err;
+                }
+                snprintf(ssid, sizeof(ssid), "ent_identity%ld", i);
+                err = nvs_erase_key(nvs_handle, ssid);
+                if (err != ESP_OK)
+                {
+                    ESP_LOGE(TAG, "Failed to delete ent_identity: %s, Error: %s", ssid, esp_err_to_name(err));
+                    return err;
+                }
+                // 將後面的SSID全部往前移動
+                for (int32_t j = i + 1; j < count; j++)
+                {
+                    char ssid[32];
+                    snprintf(ssid, sizeof(ssid), "ssid%ld", j);
+                    size_t len;
+                    err = nvs_get_str(nvs_handle, ssid, NULL, &len);
+                    if (err != ESP_OK)
+                    {
+                        ESP_LOGE(TAG, "Failed to get SSID: %s, Error: %s", ssid, esp_err_to_name(err));
+                        return err;
+                    }
+                    char *ssid_str = (char *)malloc(len);
+                    err = nvs_get_str(nvs_handle, ssid, ssid_str, &len);
+                    if (err != ESP_OK)
+                    {
+                        ESP_LOGE(TAG, "Failed to get SSID: %s, Error: %s", ssid, esp_err_to_name(err));
+                        return err;
+                    }
+                    snprintf(ssid, sizeof(ssid), "ssid%ld", j - 1);
+                    err = nvs_set_str(nvs_handle, ssid, ssid_str);
+                    if (err != ESP_OK)
+                    {
+                        ESP_LOGE(TAG, "Failed to set SSID: %s, Error: %s", ssid, esp_err_to_name(err));
+                        return err;
+                    }
+                    snprintf(ssid, sizeof(ssid), "passwd%ld", j);
+                    err = nvs_get_str(nvs_handle, ssid, NULL, &len);
+                    if (err != ESP_OK)
+                    {
+                        ESP_LOGE(TAG, "Failed to get passwd: %s, Error: %s", ssid, esp_err_to_name(err));
+                        return err;
+                    }
+                    char *passwd_str = (char *)malloc(len);
+                    err = nvs_get_str(nvs_handle, ssid, passwd_str, &len);
+                    if (err != ESP_OK)
+                    {
+                        ESP_LOGE(TAG, "Failed to get passwd: %s, Error: %s", ssid, esp_err_to_name(err));
+                        return err;
+                    }
+                    snprintf(ssid, sizeof(ssid), "passwd%ld", j - 1);
+                    err = nvs_set_str(nvs_handle, ssid, passwd_str);
+                    if (err != ESP_OK)
+                    {
+                        ESP_LOGE(TAG, "Failed to set passwd: %s, Error: %s", ssid, esp_err_to_name(err));
+                        return err;
+                    }
+                    snprintf(ssid, sizeof(ssid), "ent_username%ld", j);
+                    err = nvs_get_str(nvs_handle, ssid, NULL, &len);
+                    if (err != ESP_OK)
+                    {
+                        ESP_LOGE(TAG, "Failed to get ent_username: %s, Error: %s", ssid, esp_err_to_name(err));
+                        return err;
+                    }
+                    char *ent_username_str = (char *)malloc(len);
+                    err = nvs_get_str(nvs_handle, ssid, ent_username_str, &len);
+                    if (err != ESP_OK)
+                    {
+                        ESP_LOGE(TAG, "Failed to get ent_username: %s, Error: %s", ssid, esp_err_to_name(err));
+                        return err;
+                    }
+                    snprintf(ssid, sizeof(ssid), "ent_username%ld", j - 1);
+                    err = nvs_set_str(nvs_handle, ssid, ent_username_str);
+                    if (err != ESP_OK)
+                    {
+                        ESP_LOGE(TAG, "Failed to set ent_username: %s, Error: %s", ssid, esp_err_to_name(err));
+                        return err;
+                    }
+                    snprintf(ssid, sizeof(ssid), "ent_identity%ld", j);
+                    err = nvs_get_str(nvs_handle, ssid, NULL, &len);
+                    if (err != ESP_OK)
+                    {
+                        ESP_LOGE(TAG, "Failed to get ent_identity: %s, Error: %s", ssid, esp_err_to_name(err));
+                        return err;
+                    }
+                    char *ent_identity_str = (char *)malloc(len);
+                    err = nvs_get_str(nvs_handle, ssid, ent_identity_str, &len);
+                    if (err != ESP_OK)
+                    {
+                        ESP_LOGE(TAG, "Failed to get ent_identity: %s, Error: %s", ssid, esp_err_to_name(err));
+                        return err;
+                    }
+                    snprintf(ssid, sizeof(ssid), "ent_identity%ld", j - 1);
+                    err = nvs_set_str(nvs_handle, ssid, ent_identity_str);
+                    if (err != ESP_OK)
+                    {
+                        ESP_LOGE(TAG, "Failed to set ent_identity: %s, Error: %s", ssid, esp_err_to_name(err));
+                        return err;
+                    }
+                }
+                // 減少count
+                count--;
+                err = nvs_set_i32(nvs_handle, "len", count);
+                if (err != ESP_OK)
+                {
+                    ESP_LOGE(TAG, "Failed to set count of SSID, Error: %s", esp_err_to_name(err));
+                    return err;
+                }
+                err = nvs_commit(nvs_handle);
+                break;
+            }
+        }
+    }
+    nvs_close(nvs_handle);
+    return err;
+}
+
 static void register_set_sta(void)
 {
     set_sta_arg.ssid = arg_str1(NULL, NULL, "<ssid>", "SSID");

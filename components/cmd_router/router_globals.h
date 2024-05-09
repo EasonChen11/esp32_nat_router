@@ -35,6 +35,7 @@ void preprocess_string(char* str);
 int set_sta(int argc, char **argv);
 int set_sta_static(int argc, char **argv);
 int set_ap(int argc, char **argv);
+int del_ssid(int argc, char *argv);
 
 esp_err_t get_config_param_blob(char* name, uint8_t** blob, size_t blob_len);
 esp_err_t get_config_param_int(char* name, int* param);

@@ -83,6 +83,8 @@ static WifiSTAConfig *sta_configs = NULL;
 static int current_wifi_index = 0;
 static int current_try_count = 0;
 static int32_t total_wifi_count = 0;
+static int32_t total_try = 0;
+#define MAX_TRY 1
 static WifiAPConfig ap_config = {0};
 /* FreeRTOS event group to signal when we are connected*/
 static EventGroupHandle_t wifi_event_group;
@@ -90,7 +92,7 @@ static EventGroupHandle_t wifi_event_group;
 /* The event group allows multiple bits for each event, but we only care about one event
  * - are we connected to the AP with an IP? */
 const int WIFI_CONNECTED_BIT = BIT0;
-
+const int WIFI_FAIL_BIT = BIT1;
 #define DEFAULT_AP_IP "192.168.4.1"
 #define DEFAULT_DNS "8.8.8.8"
 
@@ -490,11 +492,15 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         connect_err_msg(event_data);
         ESP_LOGI(TAG, "disconnected - retry to connect to the AP");
         ap_connect = false;
-        if (total_wifi_count > 1)
+        if (total_wifi_count >= 1)
             connect_to_next_wifi();
         esp_wifi_connect();
         ESP_LOGI(TAG, "retry to connect to the AP");
-        xEventGroupClearBits(wifi_event_group, WIFI_CONNECTED_BIT);
+        printf("total_try: %ld\n", total_try);
+        if (total_try < MAX_TRY)
+            xEventGroupClearBits(wifi_event_group, WIFI_CONNECTED_BIT);
+        else // stop trying
+            xEventGroupClearBits(wifi_event_group, WIFI_FAIL_BIT);
     }
     else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
     {
@@ -780,7 +786,6 @@ void config_STA_wifi(WifiSTAConfig *config)
         esp_eap_client_set_password((uint8_t *)config->passwd, strlen(config->passwd));             // provide password
         esp_wifi_sta_enterprise_enable();
     }
-
     if (config->mac != NULL)
     {
         ESP_ERROR_CHECK(esp_wifi_set_mac(ESP_IF_WIFI_STA, config->mac));
@@ -816,6 +821,8 @@ void wifi_init()
     config_AP_wifi(&ap_config);
     config_STA_wifi(&default_sta_config);
     AP_IP();
+    xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+                        pdFALSE, pdTRUE, JOIN_TIMEOUT_MS / portTICK_PERIOD_MS);
     ESP_ERROR_CHECK(esp_wifi_start());
 }
 
@@ -826,33 +833,32 @@ char *param_set_default(const char *def_val)
     return retval;
 }
 
-void init_wifi_STA_config(WifiSTAConfig *config, int id)
+void init_wifi_STA_config(WifiSTAConfig *config, int32_t id)
 {
     memset(config, 0, sizeof(WifiSTAConfig)); // 初始化结构体内存为0
     char name[32];                            // 用于存储参数名
-    snprintf(name, sizeof(name), "mac%d", id);
+    snprintf(name, sizeof(name), "mac%ld", id);
     get_config_param_blob(name, &(config->mac), 6);
-    snprintf(name, sizeof(name), "ssid%d", id);
+    snprintf(name, sizeof(name), "ssid%ld", id);
     get_config_param_str(name, &(config->ssid));
     config->ssid = config->ssid ? config->ssid : param_set_default("");
-    printf("ssid: %s\n", config->ssid);
     // 重复上述模式，用于其他字段
-    snprintf(name, sizeof(name), "ent_username%d", id);
+    snprintf(name, sizeof(name), "ent_username%ld", id);
     get_config_param_str(name, &(config->ent_username));
     config->ent_username = config->ent_username ? config->ent_username : param_set_default("");
-    snprintf(name, sizeof(name), "ent_identity%d", id);
+    snprintf(name, sizeof(name), "ent_identity%ld", id);
     get_config_param_str(name, &(config->ent_identity));
     config->ent_identity = config->ent_identity ? config->ent_identity : param_set_default("");
-    snprintf(name, sizeof(name), "passwd%d", id);
+    snprintf(name, sizeof(name), "passwd%ld", id);
     get_config_param_str(name, &(config->passwd));
     config->passwd = config->passwd ? config->passwd : param_set_default("");
-    snprintf(name, sizeof(name), "static_ip%d", id);
+    snprintf(name, sizeof(name), "static_ip%ld", id);
     get_config_param_str(name, &(config->static_ip));
     config->static_ip = config->static_ip ? config->static_ip : param_set_default("");
-    snprintf(name, sizeof(name), "subnet_mask%d", id);
+    snprintf(name, sizeof(name), "subnet_mask%ld", id);
     get_config_param_str(name, &(config->subnet_mask));
     config->subnet_mask = config->subnet_mask ? config->subnet_mask : param_set_default("");
-    snprintf(name, sizeof(name), "gateway_addr%d", id);
+    snprintf(name, sizeof(name), "gateway_addr%ld", id);
     get_config_param_str(name, &(config->gateway_addr));
     config->gateway_addr = config->gateway_addr ? config->gateway_addr : param_set_default("");
     return;
@@ -880,6 +886,7 @@ int32_t Get_How_Many_WIFI_Config(void)
         return 0;
     }
     err = nvs_get_i32(nvs, "len", &count);
+    nvs_close(nvs);
     if (err != ESP_OK)
     {
         return 0;
@@ -888,16 +895,16 @@ int32_t Get_How_Many_WIFI_Config(void)
 }
 void load_wifi_configs()
 {
-
     total_wifi_count = Get_How_Many_WIFI_Config();
     printf("total_wifi_count: %ld\n", total_wifi_count);
     sta_configs = malloc(sizeof(WifiSTAConfig) * total_wifi_count);
-    for (int i = 0; i < total_wifi_count; i++)
+    for (int32_t i = 0; i < total_wifi_count; i++)
     {
         init_wifi_STA_config(&sta_configs[i], i);
     }
     init_wifi_AP_config(&ap_config);
 }
+
 void connect_to_next_wifi()
 {
     if (current_try_count < 3)
@@ -910,6 +917,7 @@ void connect_to_next_wifi()
         // 否则，移动到下一个Wi-Fi配置
         current_try_count = 0;                                            // 重置尝试次数
         current_wifi_index = (current_wifi_index + 1) % total_wifi_count; // 循环索引
+        total_try++;                                                      // 增加尝试次数
         ESP_LOGI(TAG, "Switch to next Wi-Fi configuration");
     }
 
@@ -1005,7 +1013,7 @@ void app_main(void)
 #else
     // read NVS len to check how many WIFI struct stored
     load_wifi_configs();
-    if (total_wifi_count > 0)
+    if (total_wifi_count > 10)
     {
         mac = sta_configs[0].mac;
         ssid = sta_configs[0].ssid;

@@ -77,6 +77,7 @@ static esp_err_t index_get_handler(httpd_req_t *req)
             char param2[64];
             char param3[64];
             char param4[64];
+            char ssid_to_delete[64];
             /* Get value of expected key from query string */
             if (httpd_query_key_value(buf, "ap_ssid", param1, sizeof(param1)) == ESP_OK)
             {
@@ -159,6 +160,24 @@ static esp_err_t index_get_handler(httpd_req_t *req)
                         esp_timer_start_once(restart_timer, 500000);
                     }
                 }
+            }
+            if (httpd_query_key_value(buf, "selected_ssid", ssid_to_delete, sizeof(ssid_to_delete)) == ESP_OK)
+            {
+                ESP_LOGI(TAG, "Found URL query parameter => %s", ssid_to_delete);
+                // preprocess_string(ssid_to_delete);
+                // 调用删除SSID的函数
+                del_ssid(global_ssid_list_len, ssid_to_delete);
+
+                // 重新启动定时器，重启设备
+                esp_timer_start_once(restart_timer, 500000); // 500,000 微秒后重启
+                ESP_LOGI(TAG, "SSID deleted successfully. Device will restart.");
+                // 向客户端发送成功的响应
+                // const char *success_msg = "SSID deleted successfully. Device will restart.";
+                // httpd_resp_send(req, success_msg, strlen(success_msg));
+            }
+            else
+            {
+                ESP_LOGI(TAG, "SSID not found in the list.");
             }
         }
         free(buf);
