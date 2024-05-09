@@ -44,6 +44,13 @@
 
 #include "router_globals.h"
 
+// global all file var
+#include "common.h"
+// 定义并初始化全局变量
+char **global_ssid_list = NULL;
+int global_ssid_list_len = 0;
+// OLED
+#include "OLED.h"
 // On board LED
 #if defined(CONFIG_IDF_TARGET_ESP32S3)
 #define BLINK_GPIO 44
@@ -52,9 +59,9 @@
 #endif
 
 #define CONFIG_STRUCT_NVS 0
+
 typedef struct
 {
-    int id;
     uint8_t *mac;
     char *ssid;
     char *ent_username;
@@ -63,12 +70,20 @@ typedef struct
     char *static_ip;
     char *subnet_mask;
     char *gateway_addr;
+} WifiSTAConfig;
+typedef struct
+{
     uint8_t *ap_mac;
     char *ap_ssid;
     char *ap_passwd;
     char *ap_ip;
-} WifiConfig;
-
+} WifiAPConfig;
+// 定义Wi-Fi配置数组和当前索引
+static WifiSTAConfig *sta_configs = NULL;
+static int current_wifi_index = 0;
+static int current_try_count = 0;
+static int32_t total_wifi_count = 0;
+static WifiAPConfig ap_config = {0};
 /* FreeRTOS event group to signal when we are connected*/
 static EventGroupHandle_t wifi_event_group;
 
@@ -127,6 +142,8 @@ static void initialize_filesystem(void)
     }
 }
 #endif // CONFIG_STORE_HISTORY
+
+void connect_to_next_wifi();
 
 static void initialize_nvs(void)
 {
@@ -393,7 +410,71 @@ void *led_status_thread(void *p)
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 }
-
+void connect_err_msg(void *event_data)
+{
+    wifi_event_sta_disconnected_t *disc = (wifi_event_sta_disconnected_t *)event_data;
+    ESP_LOGI(TAG, "Disconnect reason: %d", disc->reason);
+    // 根据断开原因选择是否重连
+    switch (disc->reason)
+    {
+    case WIFI_REASON_UNSPECIFIED: // 未指定的原因
+        ESP_LOGI(TAG, "retrying due to unspecified reason.");
+        break;
+    case WIFI_REASON_AUTH_EXPIRE: // 在认证阶段之前连接已断开
+        ESP_LOGI(TAG, "retrying due to auth expire.");
+        break;
+    case WIFI_REASON_AUTH_LEAVE: // 发送解除认证帧
+        ESP_LOGI(TAG, "retrying due to auth leave.");
+        break;
+    case WIFI_REASON_ASSOC_EXPIRE: // 关联过期
+        ESP_LOGI(TAG, "retrying due to assoc expire.");
+        break;
+    case WIFI_REASON_NOT_AUTHED: // 设备未经认证
+        ESP_LOGI(TAG, "retrying due to not authed.");
+        break;
+    case WIFI_REASON_NOT_ASSOCED: // 设备未关联
+        ESP_LOGI(TAG, "retrying due to not assoced.");
+        break;
+    case WIFI_REASON_ASSOC_LEAVE: // 发送解除关联帧
+        ESP_LOGI(TAG, "retrying due to assoc leave.");
+        break;
+    case WIFI_REASON_ASSOC_NOT_AUTHED: // 在接收到关联请求之前，设备未经认证
+        ESP_LOGI(TAG, "retrying due to assoc not authed.");
+        break;
+    case WIFI_REASON_IE_INVALID: // 无效信息元素
+        ESP_LOGI(TAG, "retrying due to invalid IE.");
+        break;
+    case WIFI_REASON_MIC_FAILURE: // MIC 失败
+        ESP_LOGI(TAG, "retrying due to MIC failure.");
+        break;
+    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT: // 四次握手超时
+        ESP_LOGI(TAG, "retrying due to 4-way handshake timeout.");
+        break;
+    case WIFI_REASON_GROUP_KEY_UPDATE_TIMEOUT: // 组密钥更新超时
+        ESP_LOGI(TAG, "retrying due to group key update timeout.");
+        break;
+    case WIFI_REASON_IE_IN_4WAY_DIFFERS: // 四次握手中的IE不同
+        ESP_LOGI(TAG, "retrying due to IE in 4-way differs.");
+        break;
+    case WIFI_REASON_BEACON_TIMEOUT: // 信标超时，设备因为一段时间内没有收到来自接入点（AP）的信标帧而断开连接。
+        ESP_LOGI(TAG, "retrying due to beacon timeout.");
+        break;
+    case WIFI_REASON_NO_AP_FOUND: // 未找到AP
+        ESP_LOGI(TAG, "retrying due to no AP found.");
+        break;
+    case WIFI_REASON_AUTH_FAIL: // 认证失败
+        ESP_LOGI(TAG, "retrying due to auth fail.");
+        break;
+    case WIFI_REASON_ASSOC_FAIL: // 关联失败
+        ESP_LOGI(TAG, "retrying due to assoc fail.");
+        break;
+    case WIFI_REASON_HANDSHAKE_TIMEOUT: // 握手超时
+        ESP_LOGI(TAG, "retrying due to handshake timeout.");
+        break;
+    default:
+        break;
+    }
+}
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
 {
@@ -405,8 +486,12 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     }
     else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
     {
+        // 根据断开原因选择是否重连
+        connect_err_msg(event_data);
         ESP_LOGI(TAG, "disconnected - retry to connect to the AP");
         ap_connect = false;
+        if (total_wifi_count > 1)
+            connect_to_next_wifi();
         esp_wifi_connect();
         ESP_LOGI(TAG, "retry to connect to the AP");
         xEventGroupClearBits(wifi_event_group, WIFI_CONNECTED_BIT);
@@ -441,6 +526,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
 const int CONNECTED_BIT = BIT0;
 #define JOIN_TIMEOUT_MS (2000)
 
+/*
 void wifi_init(const uint8_t *mac, const char *ssid, const char *ent_username, const char *ent_identity, const char *passwd, const char *static_ip, const char *subnet_mask, const char *gateway_addr, const uint8_t *ap_mac, const char *ap_ssid, const char *ap_passwd, const char *ap_ip)
 {
     esp_netif_dns_info_t dnsserver;
@@ -491,7 +577,7 @@ void wifi_init(const uint8_t *mac, const char *ssid, const char *ent_username, c
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-    /* ESP WIFI CONFIG */
+    // ESP WIFI CONFIG
     wifi_config_t wifi_config = {0};
     wifi_config_t ap_config = {
         .ap = {
@@ -584,6 +670,7 @@ void wifi_init(const uint8_t *mac, const char *ssid, const char *ent_username, c
         ESP_LOGI(TAG, "wifi_init_ap with default finished.");
     }
 }
+*/
 
 uint8_t *mac = NULL;
 char *ssid = NULL;
@@ -597,6 +684,140 @@ uint8_t *ap_mac = NULL;
 char *ap_ssid = NULL;
 char *ap_passwd = NULL;
 char *ap_ip = NULL;
+WifiSTAConfig default_sta_config = {0};
+/*void static_ip_config(const char *ip, const char *netmask, const char *gateway)
+{
+    esp_netif_ip_info_t ipInfo;
+    if ((strlen(ip) > 0) && (strlen(netmask) > 0) && (strlen(gateway) > 0))
+    {
+        has_static_ip = true;
+        ipInfo.ip.addr = esp_ip4addr_aton(ip);
+        ipInfo.gw.addr = esp_ip4addr_aton(gateway);
+        ipInfo.netmask.addr = esp_ip4addr_aton(netmask);
+        esp_netif_dhcpc_stop(ESP_IF_WIFI_STA); // Don't run a DHCP client
+        esp_netif_set_ip_info(ESP_IF_WIFI_STA, &ipInfo);
+        apply_portmap_tab();
+    }
+}*/
+void AP_IP() // 设置AP的IP地址，子网掩码，网关地址，DNS服务器地址,并启动DHCP服务器，讓AP可以分配IP给STA，可以藉由STA讓連上AP的設備獲得IP
+{
+    esp_netif_ip_info_t ipInfo_ap;
+    my_ap_ip = esp_ip4addr_aton(ap_ip);
+    ipInfo_ap.ip.addr = my_ap_ip;
+    ipInfo_ap.gw.addr = my_ap_ip;
+    esp_netif_set_ip4_addr(&ipInfo_ap.netmask, 255, 255, 255, 0);
+    esp_netif_dhcps_stop(wifiAP); // stop before setting ip WifiAP
+    esp_netif_set_ip_info(wifiAP, &ipInfo_ap);
+    esp_netif_dhcps_start(wifiAP);
+}
+void config_AP_wifi(WifiAPConfig *config)
+{
+    if (config == NULL)
+    {
+        ESP_LOGE(TAG, "AP config is NULL");
+        return;
+    }
+    esp_netif_dns_info_t dnsserver;
+    wifi_config_t ap_config = {
+        .ap = {
+            .channel = 0,
+            .authmode = WIFI_AUTH_WPA2_WPA3_PSK,
+            .ssid_hidden = 0,
+            .max_connection = 8,
+            .beacon_interval = 100,
+        }};
+
+    strlcpy((char *)ap_config.ap.ssid, config->ap_ssid, sizeof(ap_config.ap.ssid));
+    if (strlen(config->ap_passwd) < 8)
+    {
+        ap_config.ap.authmode = WIFI_AUTH_OPEN;
+    }
+    else
+    {
+        strlcpy((char *)ap_config.ap.password, config->ap_passwd, sizeof(ap_config.ap.password));
+    }
+
+    if (config->ap_mac != NULL)
+    {
+        ESP_ERROR_CHECK(esp_wifi_set_mac(ESP_IF_WIFI_AP, config->ap_mac));
+    }
+    dhcps_offer_t dhcps_dns_value = OFFER_DNS;
+    esp_netif_dhcps_option(wifiAP, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER, &dhcps_dns_value, sizeof(dhcps_dns_value));
+    dnsserver.ip.u_addr.ip4.addr = esp_ip4addr_aton(DEFAULT_DNS);
+    dnsserver.ip.type = ESP_IPADDR_TYPE_V4;
+    esp_netif_set_dns_info(wifiAP, ESP_NETIF_DNS_MAIN, &dnsserver);
+
+    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &ap_config));
+}
+void config_STA_wifi(WifiSTAConfig *config)
+{
+    if (config == NULL)
+    {
+        ESP_LOGE(TAG, "STA config is NULL");
+        return;
+    }
+    wifi_config_t wifi_config = {0};
+
+    strlcpy((char *)wifi_config.sta.ssid, config->ssid, sizeof(wifi_config.sta.ssid));
+    if (strlen(config->ent_username) == 0)
+    {
+        ESP_LOGI(TAG, "STA regular connection");
+        strlcpy((char *)wifi_config.sta.password, config->passwd, sizeof(wifi_config.sta.password));
+    }
+    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));
+    if (strlen(config->ent_username) != 0 && strlen(config->ent_identity) != 0)
+    {
+        ESP_LOGI(TAG, "STA enterprise connection");
+        if (strlen(config->ent_username) != 0 && strlen(config->ent_identity) != 0)
+        {
+            esp_eap_client_set_identity((uint8_t *)config->ent_identity, strlen(config->ent_identity)); // provide identity
+        }
+        else
+        {
+            esp_eap_client_set_identity((uint8_t *)config->ent_username, strlen(config->ent_username));
+        }
+        esp_eap_client_set_username((uint8_t *)config->ent_username, strlen(config->ent_username)); // provide username
+        esp_eap_client_set_password((uint8_t *)config->passwd, strlen(config->passwd));             // provide password
+        esp_wifi_sta_enterprise_enable();
+    }
+
+    if (config->mac != NULL)
+    {
+        ESP_ERROR_CHECK(esp_wifi_set_mac(ESP_IF_WIFI_STA, config->mac));
+    }
+}
+void wifi_init()
+{
+    esp_netif_init();
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+    wifiAP = esp_netif_create_default_wifi_ap();
+    wifiSTA = esp_netif_create_default_wifi_sta();
+
+    wifi_event_group = xEventGroupCreate();
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+    esp_event_handler_instance_t instance_any_id;
+    esp_event_handler_instance_t instance_got_ip;
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
+                                                        ESP_EVENT_ANY_ID,
+                                                        &wifi_event_handler,
+                                                        NULL,
+                                                        &instance_any_id));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
+                                                        IP_EVENT_STA_GOT_IP,
+                                                        &wifi_event_handler,
+                                                        NULL,
+                                                        &instance_got_ip));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+    // static_ip_config(static_ip, subnet_mask, gateway_addr);
+    config_AP_wifi(&ap_config);
+    config_STA_wifi(&default_sta_config);
+    AP_IP();
+    ESP_ERROR_CHECK(esp_wifi_start());
+}
 
 char *param_set_default(const char *def_val)
 {
@@ -605,48 +826,122 @@ char *param_set_default(const char *def_val)
     return retval;
 }
 
-void init_wifi_config(WifiConfig *config)
+void init_wifi_STA_config(WifiSTAConfig *config, int id)
 {
-    memset(config, 0, sizeof(WifiConfig)); // 初始化结构体内存为0
-
-    get_config_param_blob("mac", &(config->mac), 6);
-    get_config_param_str("ssid", &(config->ssid));
+    memset(config, 0, sizeof(WifiSTAConfig)); // 初始化结构体内存为0
+    char name[32];                            // 用于存储参数名
+    snprintf(name, sizeof(name), "mac%d", id);
+    get_config_param_blob(name, &(config->mac), 6);
+    snprintf(name, sizeof(name), "ssid%d", id);
+    get_config_param_str(name, &(config->ssid));
     config->ssid = config->ssid ? config->ssid : param_set_default("");
-
+    printf("ssid: %s\n", config->ssid);
     // 重复上述模式，用于其他字段
-    get_config_param_str("ent_username", &(config->ent_username));
+    snprintf(name, sizeof(name), "ent_username%d", id);
+    get_config_param_str(name, &(config->ent_username));
     config->ent_username = config->ent_username ? config->ent_username : param_set_default("");
-
-    get_config_param_str("ent_identity", &(config->ent_identity));
+    snprintf(name, sizeof(name), "ent_identity%d", id);
+    get_config_param_str(name, &(config->ent_identity));
     config->ent_identity = config->ent_identity ? config->ent_identity : param_set_default("");
-
-    get_config_param_str("passwd", &(config->passwd));
+    snprintf(name, sizeof(name), "passwd%d", id);
+    get_config_param_str(name, &(config->passwd));
     config->passwd = config->passwd ? config->passwd : param_set_default("");
-
-    get_config_param_str("static_ip", &(config->static_ip));
+    snprintf(name, sizeof(name), "static_ip%d", id);
+    get_config_param_str(name, &(config->static_ip));
     config->static_ip = config->static_ip ? config->static_ip : param_set_default("");
-
-    get_config_param_str("subnet_mask", &(config->subnet_mask));
+    snprintf(name, sizeof(name), "subnet_mask%d", id);
+    get_config_param_str(name, &(config->subnet_mask));
     config->subnet_mask = config->subnet_mask ? config->subnet_mask : param_set_default("");
-
-    get_config_param_str("gateway_addr", &(config->gateway_addr));
+    snprintf(name, sizeof(name), "gateway_addr%d", id);
+    get_config_param_str(name, &(config->gateway_addr));
     config->gateway_addr = config->gateway_addr ? config->gateway_addr : param_set_default("");
-
+    return;
+}
+void init_wifi_AP_config(WifiAPConfig *config)
+{
+    memset(config, 0, sizeof(WifiAPConfig));
     get_config_param_blob("ap_mac", &(config->ap_mac), 6);
     get_config_param_str("ap_ssid", &(config->ap_ssid));
     config->ap_ssid = config->ap_ssid ? config->ap_ssid : param_set_default("ESP32_NAT_Router");
-
     get_config_param_str("ap_passwd", &(config->ap_passwd));
     config->ap_passwd = config->ap_passwd ? config->ap_passwd : param_set_default("");
-
     get_config_param_str("ap_ip", &(config->ap_ip));
     config->ap_ip = config->ap_ip ? config->ap_ip : param_set_default(DEFAULT_AP_IP);
+    return;
+}
+int32_t Get_How_Many_WIFI_Config(void)
+{
+    int32_t count = 0;
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open(PARAM_NAMESPACE, NVS_READONLY, &nvs);
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(TAG, "nvs_open failed");
+        return 0;
+    }
+    err = nvs_get_i32(nvs, "len", &count);
+    if (err != ESP_OK)
+    {
+        return 0;
+    }
+    return count;
+}
+void load_wifi_configs()
+{
+
+    total_wifi_count = Get_How_Many_WIFI_Config();
+    printf("total_wifi_count: %ld\n", total_wifi_count);
+    sta_configs = malloc(sizeof(WifiSTAConfig) * total_wifi_count);
+    for (int i = 0; i < total_wifi_count; i++)
+    {
+        init_wifi_STA_config(&sta_configs[i], i);
+    }
+    init_wifi_AP_config(&ap_config);
+}
+void connect_to_next_wifi()
+{
+    if (current_try_count < 3)
+    {
+        // 如果当前Wi-Fi尝试次数小于10次，继续尝试当前Wi-Fi
+        current_try_count++;
+    }
+    else
+    {
+        // 否则，移动到下一个Wi-Fi配置
+        current_try_count = 0;                                            // 重置尝试次数
+        current_wifi_index = (current_wifi_index + 1) % total_wifi_count; // 循环索引
+        ESP_LOGI(TAG, "Switch to next Wi-Fi configuration");
+    }
+
+    // 根据当前索引设置Wi-Fi配置
+    WifiSTAConfig *cfg = &sta_configs[current_wifi_index];
+    config_STA_wifi(cfg);
+    ESP_LOGI(TAG, "connect to ap SSID: %s ", cfg->ssid);
+    // esp_wifi_disconnect();
+    // esp_wifi_connect();
+}
+
+char **ForWebServerSsidList()
+{
+    char **ssid_list = malloc(sizeof(char *) * total_wifi_count);
+    for (int i = 0; i < total_wifi_count; i++)
+    {
+        ssid_list[i] = sta_configs[i].ssid;
+    }
+    return ssid_list;
+}
+
+// OLED
+void OLED_task(void *pvParameter)
+{
+    OLED_app_main();
 }
 
 void app_main(void)
 {
+    // create task to OLED
+    xTaskCreate(&OLED_task, "OLED_task", 4096, NULL, 5, NULL);
     initialize_nvs();
-
 #if CONFIG_STORE_HISTORY
     initialize_filesystem();
     ESP_LOGI(TAG, "Command history enabled");
@@ -708,25 +1003,51 @@ void app_main(void)
         ap_ip = param_set_default(DEFAULT_AP_IP);
     }
 #else
-    WifiConfig wifi_config;
-    init_wifi_config(&wifi_config);
-    mac = wifi_config.mac;
-    ssid = wifi_config.ssid;
-    ent_username = wifi_config.ent_username;
-    ent_identity = wifi_config.ent_identity;
-    passwd = wifi_config.passwd;
-    static_ip = wifi_config.static_ip;
-    subnet_mask = wifi_config.subnet_mask;
-    gateway_addr = wifi_config.gateway_addr;
-    ap_mac = wifi_config.ap_mac;
-    ap_ssid = wifi_config.ap_ssid;
-    ap_passwd = wifi_config.ap_passwd;
-    ap_ip = wifi_config.ap_ip;
+    // read NVS len to check how many WIFI struct stored
+    load_wifi_configs();
+    if (total_wifi_count > 0)
+    {
+        mac = sta_configs[0].mac;
+        ssid = sta_configs[0].ssid;
+        ent_username = sta_configs[0].ent_username;
+        ent_identity = sta_configs[0].ent_identity;
+        passwd = sta_configs[0].passwd;
+        static_ip = sta_configs[0].static_ip;
+        subnet_mask = sta_configs[0].subnet_mask;
+        gateway_addr = sta_configs[0].gateway_addr;
+    }
+    else
+    {
+        get_config_param_blob("mac", &mac, 6);
+        ssid = param_set_default("");
+        ent_username = param_set_default("");
+        ent_identity = param_set_default("");
+        passwd = param_set_default("");
+        static_ip = param_set_default("");
+        subnet_mask = param_set_default("");
+        gateway_addr = param_set_default("");
+    }
+    default_sta_config.mac = mac;
+    default_sta_config.ssid = ssid;
+    default_sta_config.ent_username = ent_username;
+    default_sta_config.ent_identity = ent_identity;
+    default_sta_config.passwd = passwd;
+    default_sta_config.static_ip = static_ip;
+    default_sta_config.subnet_mask = subnet_mask;
+    default_sta_config.gateway_addr = gateway_addr;
+    ap_mac = ap_config.ap_mac;
+    ap_ssid = ap_config.ap_ssid;
+    ap_passwd = ap_config.ap_passwd;
+    ap_ip = ap_config.ap_ip;
 #endif
+    // create char list about ssid for webserver
+    global_ssid_list_len = total_wifi_count;
+    global_ssid_list = ForWebServerSsidList();
+
     get_portmap_tab();
 
     // Setup WIFI
-    wifi_init(mac, ssid, ent_username, ent_identity, passwd, static_ip, subnet_mask, gateway_addr, ap_mac, ap_ssid, ap_passwd, ap_ip);
+    wifi_init();
 
     pthread_t t1;
     pthread_create(&t1, NULL, led_status_thread, NULL);

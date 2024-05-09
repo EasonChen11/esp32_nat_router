@@ -150,6 +150,26 @@ setTimeout(\"location.href = '/'\",10000);\
 </small>\
 </form>\
 \
+<h2>Wi-Fi Network Management</h2>\
+<form action='' method='GET'>\
+<table>\
+<tr>\
+<td>Select Network:</td>\
+<td>\
+<select name='selected_ssid'>\
+%s\
+</select>\
+</td>\
+</tr>\
+<tr>\
+<td></td>\
+<td>\
+<input type='submit' name='delete' value='Delete and Reboot' class='red-button'/>\
+</td>\
+</tr>\
+</table>\
+</form>\
+\
 <h2>Device Management</h2>\
 <form action='' method='GET'>\
 <table>\
@@ -159,6 +179,7 @@ setTimeout(\"location.href = '/'\",10000);\
 </tr>\
 </table>\
 </form>\
+\
 </div>\
 </body>\
 </html>\

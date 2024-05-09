@@ -200,8 +200,10 @@ int set_sta(int argc, char **argv)
     preprocess_string((char *)set_sta_arg.password->sval[0]);
 
     // open nvs read name len parameters to check how many WIFI structures are stored
-    err = nvs_open(PARAM_NAMESPACE, NVS_READONLY, &nvs);
-    int count = 0;//how many WIFI structures are stored
+    err = nvs_open(PARAM_NAMESPACE, NVS_READWRITE, &nvs);
+    int32_t count = 0; // how many WIFI structures are stored
+    bool found = false;
+    int32_t index = -1;
     if (err == ESP_OK)
     {
         size_t len;
@@ -210,10 +212,10 @@ int set_sta(int argc, char **argv)
         {
             if (count > 0)
             {
-                for (int i = 0; i < count; i++)
+                for (int32_t i = 0; i < count; i++)
                 {
                     char name[32];
-                    snprintf(name, sizeof(name), "ssid%d", i);
+                    snprintf(name, sizeof(name), "ssid%ld", i);
                     char *ssid = NULL;
                     err = nvs_get_str(nvs, name, NULL, &len);
                     if (err == ESP_OK)
@@ -225,7 +227,10 @@ int set_sta(int argc, char **argv)
                             if (strcmp(ssid, set_sta_arg.ssid->sval[0]) == 0)
                             {
                                 ESP_LOGI(TAG, "SSID %s already stored.", set_sta_arg.ssid->sval[0]);
-                                return ESP_OK;
+                                found = true;
+                                index = i;
+                                free(ssid);
+                                break;
                             }
                         }
                         free(ssid);
@@ -233,25 +238,25 @@ int set_sta(int argc, char **argv)
                 }
             }
         }
+        else if (err == ESP_ERR_NVS_NOT_FOUND)
+        {
+            // set nvs len to 0
+            count = 0;
+            err = nvs_set_i32(nvs, "len", count);
+        }
     }
-
-    // open nvs readwrite to store the new WIFI structure
-    err = nvs_open(PARAM_NAMESPACE, NVS_READWRITE, &nvs);
-    if (err != ESP_OK)
-    {
-        return err;
-    }
-    //store the new WIFI structure ex ssid1, passwd1, ent_username1, ent_identity1
+    // store the new WIFI structure ex ssid1, passwd1, ent_username1, ent_identity1
+    count = found ? index : count;
     char name[32];
-    snprintf(name, sizeof(name), "ssid%d", count);
+    snprintf(name, sizeof(name), "ssid%ld", count);
     err = nvs_set_str(nvs, name, set_sta_arg.ssid->sval[0]);
     if (err == ESP_OK)
     {
-        snprintf(name, sizeof(name), "passwd%d", count);
+        snprintf(name, sizeof(name), "passwd%ld", count);
         err = nvs_set_str(nvs, name, set_sta_arg.password->sval[0]);
         if (err == ESP_OK)
         {
-            snprintf(name, sizeof(name), "ent_username%d", count);
+            snprintf(name, sizeof(name), "ent_username%ld", count);
             if (set_sta_arg.ent_username->count > 0)
             {
                 err = nvs_set_str(nvs, name, set_sta_arg.ent_username->sval[0]);
@@ -263,7 +268,7 @@ int set_sta(int argc, char **argv)
 
             if (err == ESP_OK)
             {
-                snprintf(name, sizeof(name), "ent_identity%d", count);
+                snprintf(name, sizeof(name), "ent_identity%ld", count);
                 if (set_sta_arg.ent_identity->count > 0)
                 {
                     err = nvs_set_str(nvs, name, set_sta_arg.ent_identity->sval[0]);
@@ -275,7 +280,8 @@ int set_sta(int argc, char **argv)
 
                 if (err == ESP_OK)
                 {
-                    count++;
+                    if (!found)
+                        count++;
                     err = nvs_set_i32(nvs, "len", count);
                     if (err == ESP_OK)
                     {
