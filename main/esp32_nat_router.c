@@ -982,6 +982,8 @@ void compare_scan_and_load_wifi_configs()
 // OLED
 void OLED_task(void *pvParameter)
 {
+    OLED_text = (char *)malloc(100);
+    sprintf(OLED_text, "Scan WiFi...");
     OLED_app_main();
 }
 

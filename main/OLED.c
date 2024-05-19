@@ -17,12 +17,14 @@
 */
 
 #define tag "SSD1306"
+char *OLED_text = NULL;
 
 void OLED_app_main(void)
 {
     SSD1306_t dev;
-    char lineChar[20];
-    int i = 0;
+    // char lineChar[20];
+    // int i = 0;
+    // OLED_text = (char *)malloc(20);
 #if CONFIG_I2C_INTERFACE
     ESP_LOGI(tag, "INTERFACE is i2c");
     ESP_LOGI(tag, "CONFIG_SDA_GPIO=%d", CONFIG_SDA_GPIO);
@@ -54,23 +56,42 @@ void OLED_app_main(void)
     ssd1306_init(&dev, 128, 32);
 #endif // CONFIG_SSD1306_128x32
 
+    // while (1)
+    // {
+    //     ssd1306_clear_screen(&dev, false);
+    //     ssd1306_contrast(&dev, 0xff);
+    //     ssd1306_display_text_x2(&dev, 0, OLED_text, strlen(OLED_text), false);
+    //     // ssd1306_hardware_scroll(&dev, SCROLL_LEFT);
+    //     vTaskDelay(3000 / portTICK_PERIOD_MS);
+    // }
+    int pos = 0; // 文本的起始位置
+    int length = strlen(OLED_text);
+    int display_length = 8;     // 每次顯示的字符數量
+    int direction = 1;          // 滾動方向，1 為向右，-1 為向左
+    char last_display[9] = {0}; // 用於保存上一次顯示的文字，以便比較
+
     while (1)
     {
-        ssd1306_clear_screen(&dev, false);
-        ssd1306_contrast(&dev, 0xff);
-        if (i % 2 == 0)
+        char display_text[9];
+        strncpy(display_text, &OLED_text[pos], display_length);
+        display_text[display_length] = '\0';
+
+        if (strcmp(last_display, display_text) != 0)
         {
-            sprintf(&lineChar[0], "SoC:%d.", i);
-            ssd1306_display_text_x2(&dev, 0, lineChar, strlen(lineChar), false);
+            ssd1306_display_text_x2(&dev, 0, display_text, display_length, false);
+            strcpy(last_display, display_text);
         }
-        else
+
+        // 更新位置
+        pos += direction;
+        if (pos == length - display_length)
         {
-            sprintf(&lineChar[0], "SoC:%d .", i);
-            ssd1306_display_text_x2(&dev, 0, lineChar, strlen(lineChar), false);
+            vTaskDelay(1000 / portTICK_PERIOD_MS); // 暫停一秒在最右邊
+            pos = 0;                               // 回到開始，重新滾動
+            strcpy(last_display, "");              // 確保重新顯示開始的文本
         }
-        i += 1;
-        if (i == 1000)
-            i = 0;
-        vTaskDelay(3000 / portTICK_PERIOD_MS);
+
+        vTaskDelay(300 / portTICK_PERIOD_MS);
     }
 }
+// oled 單頁顯示 8個字

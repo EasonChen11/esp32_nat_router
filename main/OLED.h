@@ -8,3 +8,4 @@
 #include "ssd1306.h"
 #include "font8x8_basic.h"
 void OLED_app_main(void);
+extern char *OLED_text;

@@ -20,6 +20,8 @@
 #include "lwip/sys.h"
 
 #include "SCANWIFI.h"
+int scan_wifi_num = 0;
+char **scan_wifi_list = NULL;
 
 static const char *TAG = "WiFiScan";
 // 执行WiFi扫描
@@ -42,7 +44,6 @@ void scan_wifi_init()
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
-
     // 开始扫描
     wifi_scan();
 }
@@ -62,6 +63,7 @@ void print_scan_results()
     for (int i = 0; i < ap_count; i++)
     {
         ESP_LOGI(TAG, "SSID %s, RSSI %d", ap_records[i].ssid, ap_records[i].rssi);
+        scan_wifi_list[i] = (char *)malloc(sizeof(ap_records[i].ssid));
         snprintf(scan_wifi_list[i], sizeof(ap_records[i].ssid), "%s", ap_records[i].ssid);
         // if (strcmp((char *)ap_records[i].ssid, CONFIG_ESP_WIFI_SSID) == 0)
         // {
