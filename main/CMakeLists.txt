@@ -1,5 +1,4 @@
-idf_component_register(SRCS "esp32_nat_router.c"
-                            "http_server.c"
+idf_component_register(SRCS "scan_wifi.c" "http_server.c" "esp32_nat_router.c" "OLED.c"
                     INCLUDE_DIRS ".")
 set_source_files_properties(http_server.c
     PROPERTIES COMPILE_FLAGS
