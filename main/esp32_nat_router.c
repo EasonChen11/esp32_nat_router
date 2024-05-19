@@ -49,6 +49,9 @@
 // 定义并初始化全局变量
 char **global_ssid_list = NULL;
 int global_ssid_list_len = 0;
+// scan wifi
+#include "SCANWIFI.h"
+
 // OLED
 #include "OLED.h"
 // On board LED
@@ -492,15 +495,21 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         connect_err_msg(event_data);
         ESP_LOGI(TAG, "disconnected - retry to connect to the AP");
         ap_connect = false;
+
         if (total_wifi_count >= 1)
             connect_to_next_wifi();
-        esp_wifi_connect();
         ESP_LOGI(TAG, "retry to connect to the AP");
         printf("total_try: %ld\n", total_try);
         if (total_try < MAX_TRY)
+        {
+            esp_wifi_connect();
             xEventGroupClearBits(wifi_event_group, WIFI_CONNECTED_BIT);
+        }
         else // stop trying
-            xEventGroupClearBits(wifi_event_group, WIFI_FAIL_BIT);
+        {
+            ESP_LOGI(TAG, "Max connection attempts reached, not retrying.");
+            xEventGroupSetBits(wifi_event_group, WIFI_FAIL_BIT); // 可以设置一个失败的事件位
+        }
     }
     else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
     {
@@ -723,7 +732,6 @@ void config_AP_wifi(WifiAPConfig *config)
         ESP_LOGE(TAG, "AP config is NULL");
         return;
     }
-    esp_netif_dns_info_t dnsserver;
     wifi_config_t ap_config = {
         .ap = {
             .channel = 0,
@@ -747,12 +755,6 @@ void config_AP_wifi(WifiAPConfig *config)
     {
         ESP_ERROR_CHECK(esp_wifi_set_mac(ESP_IF_WIFI_AP, config->ap_mac));
     }
-    dhcps_offer_t dhcps_dns_value = OFFER_DNS;
-    esp_netif_dhcps_option(wifiAP, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER, &dhcps_dns_value, sizeof(dhcps_dns_value));
-    dnsserver.ip.u_addr.ip4.addr = esp_ip4addr_aton(DEFAULT_DNS);
-    dnsserver.ip.type = ESP_IPADDR_TYPE_V4;
-    esp_netif_set_dns_info(wifiAP, ESP_NETIF_DNS_MAIN, &dnsserver);
-
     ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &ap_config));
 }
 void config_STA_wifi(WifiSTAConfig *config)
@@ -791,19 +793,27 @@ void config_STA_wifi(WifiSTAConfig *config)
         ESP_ERROR_CHECK(esp_wifi_set_mac(ESP_IF_WIFI_STA, config->mac));
     }
 }
+void DNS_server()
+{
+    esp_netif_dns_info_t dnsserver;
+    dhcps_offer_t dhcps_dns_value = OFFER_DNS;
+    esp_netif_dhcps_option(wifiAP, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER, &dhcps_dns_value, sizeof(dhcps_dns_value));
+    dnsserver.ip.u_addr.ip4.addr = esp_ip4addr_aton(DEFAULT_DNS);
+    dnsserver.ip.type = ESP_IPADDR_TYPE_V4;
+    esp_netif_set_dns_info(wifiAP, ESP_NETIF_DNS_MAIN, &dnsserver);
+}
 void wifi_init()
 {
+    wifi_event_group = xEventGroupCreate();
     esp_netif_init();
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     wifiAP = esp_netif_create_default_wifi_ap();
     wifiSTA = esp_netif_create_default_wifi_sta();
 
-    wifi_event_group = xEventGroupCreate();
-
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-
+    AP_IP();
     esp_event_handler_instance_t instance_any_id;
     esp_event_handler_instance_t instance_got_ip;
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
@@ -820,7 +830,7 @@ void wifi_init()
     // static_ip_config(static_ip, subnet_mask, gateway_addr);
     config_AP_wifi(&ap_config);
     config_STA_wifi(&default_sta_config);
-    AP_IP();
+    DNS_server();
     xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
                         pdFALSE, pdTRUE, JOIN_TIMEOUT_MS / portTICK_PERIOD_MS);
     ESP_ERROR_CHECK(esp_wifi_start());
@@ -939,6 +949,36 @@ char **ForWebServerSsidList()
     return ssid_list;
 }
 
+void compare_scan_and_load_wifi_configs()
+{
+    if (total_wifi_count == 0)
+        return;
+    // scan wifi is scan_wifi_list and scan_wifi_num, load wifi is sta_configs and total_wifi_count
+    // compare scan_wifi_list and sta_configs
+    // let sta_configs only store the wifi that is in scan_wifi_list
+    int32_t new_total_wifi_count = 0;
+    WifiSTAConfig *new_sta_configs = malloc(sizeof(WifiSTAConfig) * total_wifi_count);
+    for (int i = 0; i < total_wifi_count; i++)
+    {
+        for (int j = 0; j < scan_wifi_num; j++)
+        {
+            if (strcmp(sta_configs[i].ssid, scan_wifi_list[j]) == 0)
+            {
+                new_sta_configs[new_total_wifi_count] = sta_configs[i];
+                new_total_wifi_count++;
+                break;
+            }
+        }
+    }
+    // rewrite sta_configs
+    for (int i = 0; i < new_total_wifi_count; i++)
+    {
+        sta_configs[i] = new_sta_configs[i];
+    }
+    total_wifi_count = new_total_wifi_count;
+    free(new_sta_configs);
+}
+
 // OLED
 void OLED_task(void *pvParameter)
 {
@@ -949,6 +989,7 @@ void app_main(void)
 {
     // create task to OLED
     xTaskCreate(&OLED_task, "OLED_task", 4096, NULL, 5, NULL);
+    ScanWifi(); // use station mode to scan wifi
     initialize_nvs();
 #if CONFIG_STORE_HISTORY
     initialize_filesystem();
@@ -1013,7 +1054,8 @@ void app_main(void)
 #else
     // read NVS len to check how many WIFI struct stored
     load_wifi_configs();
-    if (total_wifi_count > 10)
+    compare_scan_and_load_wifi_configs();
+    if (total_wifi_count > 0)
     {
         mac = sta_configs[0].mac;
         ssid = sta_configs[0].ssid;
