@@ -793,6 +793,13 @@ void config_STA_wifi(WifiSTAConfig *config)
         ESP_ERROR_CHECK(esp_wifi_set_mac(ESP_IF_WIFI_STA, config->mac));
     }
 }
+void config_PM_wifi()
+{
+    // let wifi more power
+    wifi_ps_type_t ps_type = WIFI_PS_NONE;
+    esp_wifi_set_ps(ps_type);
+    
+}
 void DNS_server()
 {
     esp_netif_dns_info_t dnsserver;
@@ -830,6 +837,7 @@ void wifi_init()
     // static_ip_config(static_ip, subnet_mask, gateway_addr);
     config_AP_wifi(&ap_config);
     config_STA_wifi(&default_sta_config);
+    config_PM_wifi();
     DNS_server();
     xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
                         pdFALSE, pdTRUE, JOIN_TIMEOUT_MS / portTICK_PERIOD_MS);
@@ -987,6 +995,36 @@ void OLED_task(void *pvParameter)
     OLED_app_main();
 }
 
+void OLED_display_change(void *pvParameter)
+{
+    int scan_index = 0;
+    int delay_time;
+    if (total_wifi_count == 0)
+    {
+        sprintf(OLED_text, "No WiFi matched");
+        vTaskDelay(3000 / portTICK_PERIOD_MS);
+        sprintf(OLED_text, "Scan find %d WiFi", scan_wifi_num);
+        vTaskDelay(5000 / portTICK_PERIOD_MS);
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+    }
+    while (true)
+    {
+        if (total_wifi_count == 0)
+        {
+            strncpy(OLED_text, scan_wifi_list[scan_index], strlen(scan_wifi_list[scan_index]));
+            OLED_text[strlen(scan_wifi_list[scan_index])] = '\0'; // remove '\n' at the end
+            delay_time = strlen(scan_wifi_list[scan_index]) > 8 ? strlen(scan_wifi_list[scan_index]) - 8 : 1;
+            vTaskDelay(delay_time * 3000 / portTICK_PERIOD_MS);
+            scan_index = (scan_index + 1) % scan_wifi_num;
+        }
+        else
+        {
+            sprintf(OLED_text, "connect %s", ssid);
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+        }
+    }
+}
+
 void app_main(void)
 {
     // create task to OLED
@@ -1078,6 +1116,7 @@ void app_main(void)
         static_ip = param_set_default("");
         subnet_mask = param_set_default("");
         gateway_addr = param_set_default("");
+        sprintf(OLED_text, "No WiFi Found");
     }
     default_sta_config.mac = mac;
     default_sta_config.ssid = ssid;
@@ -1101,9 +1140,9 @@ void app_main(void)
     // Setup WIFI
     wifi_init();
 
-    pthread_t t1;
+    pthread_t t1, OLED_change;
     pthread_create(&t1, NULL, led_status_thread, NULL);
-
+    pthread_create(&OLED_change, NULL, OLED_display_change, NULL);
     ip_napt_enable(my_ap_ip, 1);
     ESP_LOGI(TAG, "NAT is enabled");
 

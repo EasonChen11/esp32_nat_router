@@ -58,13 +58,19 @@ void print_scan_results()
     ESP_ERROR_CHECK(esp_wifi_scan_get_ap_num(&ap_count));
 
     ESP_LOGI(TAG, "Total APs scanned = %u", ap_count);
-    scan_wifi_num = ap_count;
+    scan_wifi_num = 0;
     scan_wifi_list = (char **)malloc(ap_count * sizeof(char *));
     for (int i = 0; i < ap_count; i++)
     {
         ESP_LOGI(TAG, "SSID %s, RSSI %d", ap_records[i].ssid, ap_records[i].rssi);
-        scan_wifi_list[i] = (char *)malloc(sizeof(ap_records[i].ssid));
-        snprintf(scan_wifi_list[i], sizeof(ap_records[i].ssid), "%s", ap_records[i].ssid);
+        if (strlen((char *)ap_records[i].ssid) != 0)
+        {
+            scan_wifi_list[scan_wifi_num] = (char *)malloc(sizeof(ap_records[i].ssid));
+            snprintf(scan_wifi_list[scan_wifi_num], sizeof(ap_records[i].ssid), "%s", ap_records[i].ssid);
+            ESP_LOGI(TAG, "SSID %s, RSSI %d", scan_wifi_list[scan_wifi_num], ap_records[i].rssi);
+            scan_wifi_num++;
+        }
+
         // if (strcmp((char *)ap_records[i].ssid, CONFIG_ESP_WIFI_SSID) == 0)
         // {
         //     ESP_LOGI(TAG, "Found AP with SSID: %s", ap_records[i].ssid);

@@ -65,17 +65,30 @@ void OLED_app_main(void)
     //     vTaskDelay(3000 / portTICK_PERIOD_MS);
     // }
     int pos = 0; // 文本的起始位置
-    int length = strlen(OLED_text);
+    int length;
     int display_length = 8;     // 每次顯示的字符數量
     int direction = 1;          // 滾動方向，1 為向右，-1 為向左
     char last_display[9] = {0}; // 用於保存上一次顯示的文字，以便比較
-
     while (1)
     {
+        length = strlen(OLED_text);
         char display_text[9];
+        if (length <= display_length)
+        {
+            strncpy(display_text, OLED_text, display_length);
+            display_text[length] = '\0';
+            if (strcmp(last_display, display_text) != 0)
+            {
+                ssd1306_clear_screen(&dev, false); // clear screen
+                ssd1306_display_text_x2(&dev, 0, display_text, display_length, false);
+                strcpy(last_display, display_text);
+            }
+            vTaskDelay(3000 / portTICK_PERIOD_MS);
+            continue;
+        }
+
         strncpy(display_text, &OLED_text[pos], display_length);
         display_text[display_length] = '\0';
-
         if (strcmp(last_display, display_text) != 0)
         {
             ssd1306_display_text_x2(&dev, 0, display_text, display_length, false);
@@ -84,11 +97,11 @@ void OLED_app_main(void)
 
         // 更新位置
         pos += direction;
-        if (pos == length - display_length)
+        if (pos == length - display_length + 1)
         {
-            vTaskDelay(1000 / portTICK_PERIOD_MS); // 暫停一秒在最右邊
-            pos = 0;                               // 回到開始，重新滾動
-            strcpy(last_display, "");              // 確保重新顯示開始的文本
+            vTaskDelay(500 / portTICK_PERIOD_MS); // 暫停一秒在最右邊
+            pos = 0;                              // 回到開始，重新滾動
+            strcpy(last_display, "");             // 確保重新顯示開始的文本
         }
 
         vTaskDelay(300 / portTICK_PERIOD_MS);
