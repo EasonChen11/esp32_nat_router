@@ -184,6 +184,7 @@ static struct
 } set_sta_arg;
 
 /* 'set_sta' command */
+#define MAX_SSID 10
 int set_sta(int argc, char **argv)
 {
     esp_err_t err;
@@ -203,6 +204,7 @@ int set_sta(int argc, char **argv)
     err = nvs_open(PARAM_NAMESPACE, NVS_READWRITE, &nvs);
     int32_t count = 0; // how many WIFI structures are stored
     bool found = false;
+    bool full = false;
     int32_t index = -1;
     if (err == ESP_OK)
     {
@@ -210,7 +212,11 @@ int set_sta(int argc, char **argv)
         err = nvs_get_i32(nvs, "len", (int32_t *)&count);
         if (err == ESP_OK)
         {
-            if (count > 0)
+            if (count >= MAX_SSID)
+            {
+                full = true;
+            }
+            else if (count > 0)
             {
                 for (int32_t i = 0; i < count; i++)
                 {
@@ -246,7 +252,8 @@ int set_sta(int argc, char **argv)
         }
     }
     // store the new WIFI structure ex ssid1, passwd1, ent_username1, ent_identity1
-    count = found ? index : count;
+    count = full ? 0 : found ? index
+                             : count;// if full, let rewrite the first one, if found, let rewrite the found one, if not found, let add a new one
     char name[32];
     snprintf(name, sizeof(name), "ssid%ld", count);
     err = nvs_set_str(nvs, name, set_sta_arg.ssid->sval[0]);
