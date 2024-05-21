@@ -72,7 +72,7 @@ void OLED_app_main(void)
     while (1)
     {
         length = strlen(OLED_text);
-        char display_text[9];
+        char display_text[9] = {0}; // 用於保存每次顯示的文字
         if (length <= display_length)
         {
             strncpy(display_text, OLED_text, display_length);
@@ -83,6 +83,7 @@ void OLED_app_main(void)
                 ssd1306_display_text_x2(&dev, 0, display_text, display_length, false);
                 strcpy(last_display, display_text);
             }
+            pos = 0;
             vTaskDelay(3000 / portTICK_PERIOD_MS);
             continue;
         }

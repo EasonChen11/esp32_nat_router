@@ -55,6 +55,8 @@ int global_ssid_list_len = 0;
 // OLED
 #include "OLED.h"
 // On board LED
+bool try_connect = false;
+char try_connect_ssid[32] = {0};
 #if defined(CONFIG_IDF_TARGET_ESP32S3)
 #define BLINK_GPIO 44
 #else
@@ -508,6 +510,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         else // stop trying
         {
             ESP_LOGI(TAG, "Max connection attempts reached, not retrying.");
+            total_wifi_count = 0;
+            try_connect = false;
             xEventGroupSetBits(wifi_event_group, WIFI_FAIL_BIT); // 可以设置一个失败的事件位
         }
     }
@@ -798,7 +802,6 @@ void config_PM_wifi()
     // let wifi more power
     wifi_ps_type_t ps_type = WIFI_PS_NONE;
     esp_wifi_set_ps(ps_type);
-    
 }
 void DNS_server()
 {
@@ -943,6 +946,7 @@ void connect_to_next_wifi()
     WifiSTAConfig *cfg = &sta_configs[current_wifi_index];
     config_STA_wifi(cfg);
     ESP_LOGI(TAG, "connect to ap SSID: %s ", cfg->ssid);
+    strcpy(try_connect_ssid, cfg->ssid);
     // esp_wifi_disconnect();
     // esp_wifi_connect();
 }
@@ -999,28 +1003,36 @@ void OLED_display_change(void *pvParameter)
 {
     int scan_index = 0;
     int delay_time;
+    bool try_connect_ans = total_wifi_count > 0;
     if (total_wifi_count == 0)
     {
         sprintf(OLED_text, "No WiFi matched");
         vTaskDelay(3000 / portTICK_PERIOD_MS);
         sprintf(OLED_text, "Scan find %d WiFi", scan_wifi_num);
         vTaskDelay(5000 / portTICK_PERIOD_MS);
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
     while (true)
     {
-        if (total_wifi_count == 0)
+        if (try_connect)
         {
-            strncpy(OLED_text, scan_wifi_list[scan_index], strlen(scan_wifi_list[scan_index]));
+            sprintf(OLED_text, "connect %s", try_connect_ssid);
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+        }
+        else if (try_connect_ans)
+        {
+            sprintf(OLED_text, "fail to connect %s", try_connect_ssid);
+            try_connect_ans = false;
+            vTaskDelay(5000 / portTICK_PERIOD_MS);
+            strcpy(OLED_text, "");
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+        }
+        else if (total_wifi_count == 0 || !try_connect)
+        {
+            strcpy(OLED_text, scan_wifi_list[scan_index]);
             OLED_text[strlen(scan_wifi_list[scan_index])] = '\0'; // remove '\n' at the end
             delay_time = strlen(scan_wifi_list[scan_index]) > 8 ? strlen(scan_wifi_list[scan_index]) - 8 : 1;
             vTaskDelay(delay_time * 3000 / portTICK_PERIOD_MS);
             scan_index = (scan_index + 1) % scan_wifi_num;
-        }
-        else
-        {
-            sprintf(OLED_text, "connect %s", ssid);
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
         }
     }
 }
@@ -1105,6 +1117,7 @@ void app_main(void)
         static_ip = sta_configs[0].static_ip;
         subnet_mask = sta_configs[0].subnet_mask;
         gateway_addr = sta_configs[0].gateway_addr;
+        try_connect = true;
     }
     else
     {
@@ -1117,6 +1130,7 @@ void app_main(void)
         subnet_mask = param_set_default("");
         gateway_addr = param_set_default("");
         sprintf(OLED_text, "No WiFi Found");
+        try_connect = false;
     }
     default_sta_config.mac = mac;
     default_sta_config.ssid = ssid;

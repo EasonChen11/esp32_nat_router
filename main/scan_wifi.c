@@ -62,7 +62,7 @@ void print_scan_results()
     scan_wifi_list = (char **)malloc(ap_count * sizeof(char *));
     for (int i = 0; i < ap_count; i++)
     {
-        ESP_LOGI(TAG, "SSID %s, RSSI %d", ap_records[i].ssid, ap_records[i].rssi);
+        // ESP_LOGI(TAG, "SSID %s, RSSI %d", ap_records[i].ssid, ap_records[i].rssi);
         if (strlen((char *)ap_records[i].ssid) != 0)
         {
             scan_wifi_list[scan_wifi_num] = (char *)malloc(sizeof(ap_records[i].ssid));
