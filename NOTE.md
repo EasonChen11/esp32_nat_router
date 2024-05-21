@@ -30,3 +30,5 @@ portmap add TCP 8080 192.168.4.3 3000
 ```
 
 因為設備連上了家用路由器，所以和 ESP32 router 屬於内網，當連接這個 IP 後，在連到對應的 port 就能連接到有在 ESP32 router 上開啟映射的其他設備。
+
+esp file in C:\Users\ysche\esp\v5.1.2\esp-idf\components
