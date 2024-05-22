@@ -995,7 +995,10 @@ void compare_scan_and_load_wifi_configs()
 void OLED_task(void *pvParameter)
 {
     OLED_text = (char *)malloc(100);
+    OLED_xSemaphore = xSemaphoreCreateMutex();
+    xSemaphoreTake(OLED_xSemaphore, portMAX_DELAY);
     sprintf(OLED_text, "Scan WiFi...");
+    xSemaphoreGive(OLED_xSemaphore);
     OLED_app_main();
 }
 
@@ -1006,21 +1009,28 @@ void OLED_display_change(void *pvParameter)
     bool try_connect_ans = total_wifi_count > 0;
     if (total_wifi_count == 0)
     {
+        xSemaphoreTake(OLED_xSemaphore, portMAX_DELAY);
         sprintf(OLED_text, "No WiFi matched");
+        xSemaphoreGive(OLED_xSemaphore);
         vTaskDelay(3000 / portTICK_PERIOD_MS);
+        xSemaphoreTake(OLED_xSemaphore, portMAX_DELAY);
         sprintf(OLED_text, "Scan find %d WiFi", scan_wifi_num);
+        xSemaphoreGive(OLED_xSemaphore);
         vTaskDelay(5000 / portTICK_PERIOD_MS);
     }
     while (true)
     {
+        xSemaphoreTake(OLED_xSemaphore, portMAX_DELAY);
         if (try_connect)
         {
             sprintf(OLED_text, "connect %s", try_connect_ssid);
+            xSemaphoreGive(OLED_xSemaphore);
             vTaskDelay(1000 / portTICK_PERIOD_MS);
         }
         else if (try_connect_ans)
         {
             sprintf(OLED_text, "fail to connect %s", try_connect_ssid);
+            xSemaphoreGive(OLED_xSemaphore);
             try_connect_ans = false;
             vTaskDelay(5000 / portTICK_PERIOD_MS);
             strcpy(OLED_text, "");
@@ -1029,6 +1039,7 @@ void OLED_display_change(void *pvParameter)
         else if (total_wifi_count == 0 || !try_connect)
         {
             strcpy(OLED_text, scan_wifi_list[scan_index]);
+            xSemaphoreGive(OLED_xSemaphore);
             OLED_text[strlen(scan_wifi_list[scan_index])] = '\0'; // remove '\n' at the end
             delay_time = strlen(scan_wifi_list[scan_index]) > 8 ? strlen(scan_wifi_list[scan_index]) - 8 : 1;
             vTaskDelay(delay_time * 3000 / portTICK_PERIOD_MS);
@@ -1157,7 +1168,7 @@ void app_main(void)
     pthread_t t1, OLED_change;
     pthread_create(&t1, NULL, led_status_thread, NULL);
     pthread_create(&OLED_change, NULL, OLED_display_change, NULL);
-    ip_napt_enable(my_ap_ip, 1);
+    ip_napt_enable(my_ap_ip, 1); // 开启NAT功能
     ESP_LOGI(TAG, "NAT is enabled");
 
     char *lock = NULL;
