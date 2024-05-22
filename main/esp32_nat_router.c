@@ -1117,6 +1117,8 @@ void app_main(void)
 #else
     // read NVS len to check how many WIFI struct stored
     load_wifi_configs();
+    global_ssid_list_len = total_wifi_count;
+    global_ssid_list = ForWebServerSsidList();
     compare_scan_and_load_wifi_configs();
     if (total_wifi_count > 0)
     {
@@ -1157,8 +1159,6 @@ void app_main(void)
     ap_ip = ap_config.ap_ip;
 #endif
     // create char list about ssid for webserver
-    global_ssid_list_len = total_wifi_count;
-    global_ssid_list = ForWebServerSsidList();
 
     get_portmap_tab();
 
