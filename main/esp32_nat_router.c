@@ -90,6 +90,8 @@ static int current_try_count = 0;
 static int32_t total_wifi_count = 0;
 static int32_t total_try = 0;
 #define MAX_TRY 1
+static WifiSTAConfig *mem_sta_configs = NULL;
+static int mem_sta_configs_len = 0;
 static WifiAPConfig ap_config = {0};
 /* FreeRTOS event group to signal when we are connected*/
 static EventGroupHandle_t wifi_event_group;
@@ -953,10 +955,10 @@ void connect_to_next_wifi()
 
 char **ForWebServerSsidList()
 {
-    char **ssid_list = malloc(sizeof(char *) * total_wifi_count);
-    for (int i = 0; i < total_wifi_count; i++)
+    char **ssid_list = malloc(sizeof(char *) * mem_sta_configs_len);
+    for (int i = 0; i < mem_sta_configs_len; i++)
     {
-        ssid_list[i] = sta_configs[i].ssid;
+        ssid_list[i] = mem_sta_configs[i].ssid;
     }
     return ssid_list;
 }
@@ -969,9 +971,12 @@ void compare_scan_and_load_wifi_configs()
     // compare scan_wifi_list and sta_configs
     // let sta_configs only store the wifi that is in scan_wifi_list
     int32_t new_total_wifi_count = 0;
+    mem_sta_configs = malloc(sizeof(WifiSTAConfig) * total_wifi_count);
     WifiSTAConfig *new_sta_configs = malloc(sizeof(WifiSTAConfig) * total_wifi_count);
     for (int i = 0; i < total_wifi_count; i++)
     {
+        // copy sta_configs to mem_sta_configs
+        mem_sta_configs[i] = sta_configs[mem_sta_configs_len++];
         for (int j = 0; j < scan_wifi_num; j++)
         {
             if (strcmp(sta_configs[i].ssid, scan_wifi_list[j]) == 0)
@@ -989,6 +994,15 @@ void compare_scan_and_load_wifi_configs()
     }
     total_wifi_count = new_total_wifi_count;
     free(new_sta_configs);
+}
+void MemLoadWifiConfig()
+{
+    for (int i = 0; i < mem_sta_configs_len; i++)
+    {
+        sta_configs[i] = mem_sta_configs[i];
+    }
+    total_wifi_count = mem_sta_configs_len;
+    free(mem_sta_configs);
 }
 
 // OLED
@@ -1157,7 +1171,7 @@ void app_main(void)
     ap_ip = ap_config.ap_ip;
 #endif
     // create char list about ssid for webserver
-    global_ssid_list_len = total_wifi_count;
+    global_ssid_list_len = mem_sta_configs_len;
     global_ssid_list = ForWebServerSsidList();
 
     get_portmap_tab();
