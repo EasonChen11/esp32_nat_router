@@ -18,6 +18,7 @@
 
 #define tag "SSD1306"
 char *OLED_text = NULL;
+SemaphoreHandle_t OLED_xSemaphore = NULL;
 
 void OLED_app_main(void)
 {
@@ -71,11 +72,13 @@ void OLED_app_main(void)
     char last_display[9] = {0}; // 用於保存上一次顯示的文字，以便比較
     while (1)
     {
+        xSemaphoreTake(OLED_xSemaphore, portMAX_DELAY);
         length = strlen(OLED_text);
         char display_text[9] = {0}; // 用於保存每次顯示的文字
         if (length <= display_length)
         {
             strncpy(display_text, OLED_text, display_length);
+            xSemaphoreGive(OLED_xSemaphore);
             display_text[length] = '\0';
             if (strcmp(last_display, display_text) != 0)
             {
@@ -89,6 +92,7 @@ void OLED_app_main(void)
         }
 
         strncpy(display_text, &OLED_text[pos], display_length);
+        xSemaphoreGive(OLED_xSemaphore);
         display_text[display_length] = '\0';
         if (strcmp(last_display, display_text) != 0)
         {

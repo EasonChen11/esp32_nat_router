@@ -3,9 +3,12 @@
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "esp_log.h"
 
 #include "ssd1306.h"
 #include "font8x8_basic.h"
 void OLED_app_main(void);
 extern char *OLED_text;
+// semophore
+extern SemaphoreHandle_t OLED_xSemaphore;
