@@ -159,6 +159,190 @@ example.com 回覆封包到 ESP32 STA IP
 
 ---
 
+## lwIP 封包處理的每一步詳解
+
+lwIP 在轉發過程中**不是單純轉送**，而是會修改封包內容。以下詳細說明每一步。
+
+### 上行（AP Client → 網際網路）：lwIP 的完整處理步驟
+
+假設手機 (192.168.4.10:12345) 要存取 8.8.8.8:53 (DNS)，ESP32 STA IP 為 192.168.1.50。
+
+#### Step 1：WiFi Driver 接收 L2 Frame
+
+WiFi Driver 從 AP 介面收到 802.11 無線封包，解封裝為 Ethernet Frame 交給 ESP-NETIF。
+
+此時封包內容：
+```
+[L2 Ethernet Header]
+  src MAC: AA:BB:CC:DD:EE:01（手機 MAC）
+  dst MAC: AA:BB:CC:DD:EE:02（ESP32 AP MAC）
+
+[L3 IP Header]
+  src IP:  192.168.4.10
+  dst IP:  8.8.8.8
+  TTL:     64
+  Header Checksum: 0xABCD（原始值）
+
+[L4 UDP Header]
+  src Port: 12345
+  dst Port: 53
+  Checksum: 0x1234（原始值）
+
+[Payload]
+  DNS 查詢資料...
+```
+
+#### Step 2：L2-to-L3 Copy（進入 lwIP）
+
+`CONFIG_LWIP_L2_TO_L3_COPY=y` 啟用後，ESP-NETIF 將封包從 WiFi Driver 的 buffer 複製到 lwIP 自己的 pbuf（packet buffer）記憶體中。這是必要的，因為 WiFi Driver 的 buffer 生命週期短暫，lwIP 需要自己的副本來處理。
+
+#### Step 3：lwIP IP Input（ip4_input）
+
+lwIP 收到封包後，檢查目的 IP：
+- 目的 IP `8.8.8.8` **不是** ESP32 自己的 IP（不是 192.168.4.1 也不是 192.168.1.50）
+- → 這不是給 ESP32 的封包，需要轉發
+
+#### Step 4：IP Forwarding 決策（ip4_forward）
+
+`CONFIG_LWIP_IP_FORWARD=y` 啟用了這個功能。lwIP 執行以下操作：
+
+1. **TTL 遞減**：`TTL: 64 → 63`
+   - 每經過一個路由器，TTL 減 1
+   - 如果 TTL 到 0，丟棄封包並發送 ICMP Time Exceeded
+
+2. **路由查詢**：查路由表決定從哪個介面發出
+   - 目的 `8.8.8.8` 不在 AP 子網 192.168.4.0/24 內
+   - 匹配預設路由 → 從 STA 介面發出
+
+#### Step 5：NAPT 改寫（ip_napt_forward）
+
+`CONFIG_LWIP_IPV4_NAPT=y` 啟用後，lwIP 在轉發時執行 NAT 位址轉換：
+
+1. **改寫 L3 src IP**：`192.168.4.10 → 192.168.1.50`（ESP32 STA IP）
+2. **改寫 L4 src Port**：`12345 → 49152`（lwIP 分配的隨機高位 Port）
+3. **記錄 NAT 狀態表**：
+   ```
+   NAT Table Entry:
+     Protocol: UDP
+     Internal: 192.168.4.10:12345
+     External: 192.168.1.50:49152
+     Remote:   8.8.8.8:53
+     State:    ACTIVE
+   ```
+4. **重新計算 IP Header Checksum**：因為 src IP 改了，checksum 必須重算
+5. **重新計算 UDP/TCP Checksum**：因為 src IP 和 src Port 都改了（UDP/TCP 的 checksum 包含 pseudo header 中的 IP 位址）
+
+#### Step 6：L2 Header 重建
+
+lwIP 將封包交給 STA 介面的 netif 輸出函式，重建 L2 header：
+
+1. **ARP 查詢**：查找上游路由器（預設閘道）的 MAC 位址
+   - 如果 ARP cache 有 → 直接使用
+   - 如果沒有 → 發送 ARP Request，等待回覆後再發送
+2. **填入新的 L2 Header**：
+   - src MAC → ESP32 STA MAC
+   - dst MAC → 上游路由器 MAC
+
+#### Step 7：最終發出的封包
+
+```
+[L2 Ethernet Header]                          ← 全部重建
+  src MAC: FF:FF:FF:FF:FF:01（ESP32 STA MAC）
+  dst MAC: FF:FF:FF:FF:FF:02（上游路由器 MAC）
+
+[L3 IP Header]                                ← 部分修改
+  src IP:  192.168.1.50                        ← 改（NAT）
+  dst IP:  8.8.8.8                             ← 不改
+  TTL:     63                                  ← 改（減 1）
+  Header Checksum: 0xEF01                      ← 改（重算）
+
+[L4 UDP Header]                               ← 部分修改
+  src Port: 49152                              ← 改（NAPT）
+  dst Port: 53                                 ← 不改
+  Checksum: 0x5678                             ← 改（重算）
+
+[Payload]                                      ← 不改
+  DNS 查詢資料...（完全不變）
+```
+
+### 下行（網際網路 → AP Client）：lwIP 的完整處理步驟
+
+上游回覆封包到達 ESP32 STA 介面：
+
+#### Step 1：WiFi Driver 接收
+
+STA 介面收到回覆封包：
+```
+src IP: 8.8.8.8,  dst IP: 192.168.1.50
+src Port: 53,     dst Port: 49152
+```
+
+#### Step 2：lwIP IP Input
+
+檢查目的 IP `192.168.1.50` — 這是 ESP32 STA 自己的 IP。
+但 dst Port `49152` 不是 ESP32 本地的服務 Port。
+
+#### Step 3：NAPT 反向查表
+
+lwIP 在 NAT 狀態表中查找：
+```
+查詢: Protocol=UDP, External Port=49152, Remote=8.8.8.8:53
+命中: Internal=192.168.4.10:12345
+```
+
+#### Step 4：NAPT 反向改寫
+
+1. **改寫 L3 dst IP**：`192.168.1.50 → 192.168.4.10`
+2. **改寫 L4 dst Port**：`49152 → 12345`
+3. **重新計算 IP Header Checksum**
+4. **重新計算 UDP/TCP Checksum**
+5. **TTL 遞減**：`TTL - 1`
+
+#### Step 5：L2 Header 重建 + 發送
+
+- ARP 查詢手機 MAC（192.168.4.10 的 MAC）
+- 從 AP 介面發出，src MAC = ESP32 AP MAC，dst MAC = 手機 MAC
+
+#### Step 6：手機收到的封包
+
+```
+src IP: 8.8.8.8:53  →  dst IP: 192.168.4.10:12345
+```
+手機完全不知道 NAT 的存在，以為自己直接跟 8.8.8.8 通訊。
+
+### 封包欄位修改總覽
+
+| 欄位 | 上行（AP→STA） | 下行（STA→AP） | 修改原因 |
+|------|---------------|---------------|----------|
+| L2 src MAC | → ESP32 STA MAC | → ESP32 AP MAC | 每次轉發都會重建 L2 |
+| L2 dst MAC | → 上游路由器 MAC | → Client MAC | ARP 查詢後填入 |
+| L3 src IP | → ESP32 STA IP | 不改 | NAT 隱藏內網 IP |
+| L3 dst IP | 不改 | → Client 內網 IP | NAT 反向還原 |
+| L3 TTL | 減 1 | 減 1 | 路由器標準行為 |
+| L3 Checksum | 重新計算 | 重新計算 | IP header 變了 |
+| L4 src Port | → 隨機高位 Port | 不改 | NAPT 端口映射 |
+| L4 dst Port | 不改 | → Client 原始 Port | NAPT 反向還原 |
+| L4 Checksum | 重新計算 | 重新計算 | pseudo header 含 IP |
+| Payload | **完全不變** | **完全不變** | NAT 只改 header |
+
+### 為什麼不能只轉送不修改？
+
+如果只開 `IP_FORWARD` 不開 `NAPT`（純轉送，只改 L2 MAC 和 TTL）：
+
+```
+手機發出: src=192.168.4.10 dst=8.8.8.8
+ESP32 轉發到上游路由器: src=192.168.4.10 dst=8.8.8.8  ← src 沒改
+```
+
+問題：
+1. 上游路由器收到 src=192.168.4.10 的封包，但它的路由表沒有 192.168.4.0/24 這個子網
+2. 回覆封包 dst=192.168.4.10，上游路由器不知道往哪送
+3. 結果：**封包有去無回，無法上網**
+
+所以 NAPT 是必須的 — 它讓所有內網裝置的流量看起來都來自 ESP32 STA 的 IP，上游路由器只需要知道怎麼回覆給 ESP32 就好。
+
+---
+
 ## 關鍵程式碼
 
 ### 初始化雙模 WiFi
