@@ -12,23 +12,47 @@ lwIP（lightweight IP）是一個輕量級的開源 TCP/IP 協議棧，專為嵌
 - 記憶體佔用極小，適合 MCU 等嵌入式裝置
 - ESP-IDF 預設將 lwIP 作為 TCP/IP 協議棧
 
+### 網路分層模型與 lwIP 的位置
+
+一般網路模型分層如下（OSI 七層對照 TCP/IP 四層）：
+
+| OSI 七層 | TCP/IP 四層 | 功能 | 範例 |
+|----------|-------------|------|------|
+| 7. 應用層 | 應用層 | 使用者介面與協議 | HTTP, DNS, MQTT |
+| 6. 表示層 | ↑ | 資料格式轉換、加密 | TLS, JSON |
+| 5. 會話層 | ↑ | 連線管理 | Session |
+| 4. 傳輸層 | 傳輸層 | 端對端傳輸 | TCP, UDP |
+| 3. 網路層 | 網際網路層 | IP 路由、NAT | IP, ICMP, ARP |
+| 2. 資料鏈結層 | 網路存取層 | Frame 封裝、MAC | WiFi (802.11), Ethernet |
+| 1. 實體層 | ↑ | 電氣訊號傳輸 | 無線電波、網路線 |
+
+lwIP 涵蓋 **L3 ~ L4**，並包含部分應用層協議：
+
+- **L3 網路層** — IP 路由、NAPT、ICMP、ARP（lwIP 的核心）
+- **L4 傳輸層** — TCP、UDP 連線管理
+- **部分 L7 應用層** — 內建 DHCP、DNS、SNTP 等輕量協議
+
+lwIP **不處理**的部分：
+- **L1/L2**（實體層/資料鏈結層）— 由 ESP32 WiFi Driver 負責
+- **完整的應用層** — HTTP Server、MQTT 等由 ESP-IDF 的其他元件處理
+
 ### lwIP 在 ESP32 中的角色
 
-ESP32 的網路架構分為三層：
+ESP32 的網路架構分層：
 
 ```
-┌────────────────────────────┐
-│ 應用層（HTTP Server, DNS） │
-├────────────────────────────┤
-│ lwIP 協議棧（TCP/IP, NAT） │  ← lwIP 在這裡
-├────────────────────────────┤
-│ ESP-NETIF（網路介面抽象層） │
-├────────────────────────────┤
-│ WiFi Driver（硬體驅動）     │
-└────────────────────────────┘
+HTTP Server, CLI ─────── 應用層（ESP-IDF 元件）
+        │
+   TCP / UDP ─────────── 傳輸層（lwIP）
+        │
+ IP Forward + NAPT ───── 網路層（lwIP）  ← 封包轉發在這裡發生
+        │
+    ESP-NETIF ─────────── 抽象層（銜接 lwIP 與 Driver）
+        │
+  WiFi Driver ─────────── 資料鏈結層 + 實體層（ESP32 硬體）
 ```
 
-lwIP 負責所有 L3（網路層）以上的處理，包括 IP 路由、NAT 轉換、TCP/UDP 連線管理。ESP-NETIF 則是 ESP-IDF 提供的抽象層，將 WiFi Driver 收到的 L2 封包傳遞給 lwIP。
+簡單來說，lwIP 就是 ESP32 的「網路大腦」，負責 L3/L4 的所有決策（封包要送去哪、怎麼轉換位址、TCP 連線狀態追蹤），而 WiFi Driver 只負責「把封包透過無線電收發出去」。ESP-NETIF 則是 ESP-IDF 提供的抽象層，將 WiFi Driver 收到的 L2 封包傳遞給 lwIP。
 
 ---
 
